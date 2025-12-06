@@ -166,42 +166,82 @@ def _write_finding_to_gcs(job_id, check_name, finding_data):
     except Exception as e:
         logging.error(f"Failed to write finding to GCS for {check_name}: {e}")
 
+# --- ADDED: Helper to write calculated scores to GCS ---
+def _write_scores_to_gcs(job_id, scores_data):
+    """Writes the final calculated scores to a JSON file in GCS."""
+    try:
+        bucket = storage_client.bucket(RESULTS_BUCKET)
+        blob_name = f"{job_id}/scores.json"
+        blob = bucket.blob(blob_name)
+        blob.upload_from_string(
+            json.dumps(scores_data),
+            content_type='application/json'
+        )
+        print(f"✅ Final scores uploaded to GCS: {blob_name}")
+    except Exception as e:
+        logging.error(f"Failed to write scores to GCS for job {job_id}: {e}")
+# --- END ADDED HELPER ---
+
 def _read_all_findings_from_gcs(job_id):
     """Reads all temporary finding files for a job and groups them by category."""
+    # --- MODIFICATION START: ADDED WEIGHTS TO THE MAP ---
+    # Weight 5: Critical Security/Compliance/Reliability.
+    # Weight 3-4: High Security/Cost/Operational.
+    # Weight 1-2: Informational/Low priority.
     category_map = {
         # Security & Identity
-        "Critical Org-Level Roles": "Security & Identity", "Public Org-Level Access": "Security & Identity",
-        "Organization IAM Policy": "Security & Identity", "Security Command Center Status": "Security & Identity",
-        "Project IAM Hygiene": "Security & Identity", "Service Account Key Rotation": "Security & Identity",
-        "Public GCS Buckets": "Security & Identity", "Open Firewall Rules": "Security & Identity",
-        "Primitive Roles (Owner or Editor)": "Security & Identity",
+        "Critical Org-Level Roles": {"category": "Security & Identity", "weight": 5}, 
+        "Public Org-Level Access": {"category": "Security & Identity", "weight": 5},
+        "Organization IAM Policy": {"category": "Security & Identity", "weight": 5}, 
+        "Security Command Center Status": {"category": "Security & Identity", "weight": 3},
+        "Project IAM Hygiene": {"category": "Security & Identity", "weight": 4}, 
+        "Service Account Key Rotation": {"category": "Security & Identity", "weight": 3},
+        "Public GCS Buckets": {"category": "Security & Identity", "weight": 5}, 
+        "Open Firewall Rules": {"category": "Security & Identity", "weight": 5},
+        "Primitive Roles (Owner or Editor)": {"category": "Security & Identity", "weight": 4},
 
         # Cost Optimization
-        "Idle Cloud SQL Instances": "Cost Optimization", "Low Utilization VMs": "Cost Optimization",
-        "VM Rightsizing": "Cost Optimization", "Unassociated IPs": "Cost Optimization",
-        "Idle Load Balancers": "Cost Optimization", "Idle Persistent Disks": "Cost Optimization",
-        "Underutilized Reservations": "Cost Optimization", "Idle Reservations": "Cost Optimization",
+        "Idle Cloud SQL Instances": {"category": "Cost Optimization", "weight": 3}, 
+        "Low Utilization VMs": {"category": "Cost Optimization", "weight": 3},
+        "VM Rightsizing": {"category": "Cost Optimization", "weight": 1}, 
+        "Unassociated IPs": {"category": "Cost Optimization", "weight": 2},
+        "Idle Load Balancers": {"category": "Cost Optimization", "weight": 2}, 
+        "Idle Persistent Disks": {"category": "Cost Optimization", "weight": 2},
+        "Underutilized Reservations": {"category": "Cost Optimization", "weight": 2}, 
+        "Idle Reservations": {"category": "Cost Optimization", "weight": 1},
 
         # Reliability & Resilience
-        "Cloud Storage Versioning": "Reliability & Resilience", "GKE Hygiene": "Reliability & Resilience",
-        "Essential Contacts": "Reliability & Resilience", "Personalized Service Health": "Reliability & Resilience",
-        "Cloud SQL High Availability": "Reliability & Resilience", "Cloud SQL Automated Backups": "Reliability & Resilience",
-        "Cloud SQL Backup Retention": "Reliability & Resilience", "Cloud SQL PITR": "Reliability & Resilience",
-        "MIG Resilience (Zonal)": "Reliability & Resilience", "Disk Snapshot Resilience": "Reliability & Resilience",
+        "Cloud Storage Versioning": {"category": "Reliability & Resilience", "weight": 3}, 
+        "GKE Hygiene": {"category": "Reliability & Resilience", "weight": 3},
+        "Essential Contacts": {"category": "Reliability & Resilience", "weight": 1}, 
+        "Personalized Service Health": {"category": "Reliability & Resilience", "weight": 1},
+        "Cloud SQL High Availability": {"category": "Reliability & Resilience", "weight": 5}, 
+        "Cloud SQL Automated Backups": {"category": "Reliability & Resilience", "weight": 5},
+        "Cloud SQL Backup Retention": {"category": "Reliability & Resilience", "weight": 3}, 
+        "Cloud SQL PITR": {"category": "Reliability & Resilience", "weight": 3},
+        "MIG Resilience (Zonal)": {"category": "Reliability & Resilience", "weight": 4}, 
+        "Disk Snapshot Resilience": {"category": "Reliability & Resilience", "weight": 3},
 
         # Operational Excellence & Observability
-        "Organization Log Sink": "Operational Excellence & Observability",
-        "OS Config Agent Coverage": "Operational Excellence & Observability", "Monitoring Alert Coverage": "Operational Excellence & Observability",
-        "Standalone VMs (Not in MIGs)": "Operational Excellence & Observability",
-        "VPC IP Address Utilization": "Operational Excellence & Observability", "VPC Connectivity": "Operational Excellence & Observability",
-        "Load Balancer Health": "Operational Excellence & Observability", "GKE IP Address Utilization": "Operational Excellence & Observability",
-        "GKE Connectivity": "Operational Excellence & Observability", "GKE Service Account": "Operational Excellence & Observability",
-        "Dynamic Route Health": "Operational Excellence & Observability", "Cloud SQL Connectivity": "Operational Excellence & Observability",
-        "VPC Firewall Complexity (>150 Rules)": "Operational Excellence & Observability",
-        "Recent Changes (Org & Project)": "Operational Excellence & Observability", "Unattended Projects": "Operational Excellence & Observability",
-        "Quota Utilization (>80%)": "Operational Excellence & Observability"
+        "Organization Log Sink": {"category": "Operational Excellence & Observability", "weight": 4},
+        "OS Config Agent Coverage": {"category": "Operational Excellence & Observability", "weight": 2}, 
+        "Monitoring Alert Coverage": {"category": "Operational Excellence & Observability", "weight": 3},
+        "Standalone VMs (Not in MIGs)": {"category": "Operational Excellence & Observability", "weight": 2},
+        "VPC IP Address Utilization": {"category": "Operational Excellence & Observability", "weight": 1}, 
+        "VPC Connectivity": {"category": "Operational Excellence & Observability", "weight": 1},
+        "Load Balancer Health": {"category": "Operational Excellence & Observability", "weight": 1}, 
+        "GKE IP Address Utilization": {"category": "Operational Excellence & Observability", "weight": 1},
+        "GKE Connectivity": {"category": "Operational Excellence & Observability", "weight": 1}, 
+        "GKE Service Account": {"category": "Operational Excellence & Observability", "weight": 2},
+        "Dynamic Route Health": {"category": "Operational Excellence & Observability", "weight": 1}, 
+        "Cloud SQL Connectivity": {"category": "Operational Excellence & Observability", "weight": 1},
+        "VPC Firewall Complexity (>150 Rules)": {"category": "Operational Excellence & Observability", "weight": 1},
+        "Recent Changes (Org & Project)": {"category": "Operational Excellence & Observability", "weight": 1}, 
+        "Unattended Projects": {"category": "Operational Excellence & Observability", "weight": 2},
+        "Quota Utilization (>80%)": {"category": "Operational Excellence & Observability", "weight": 2}
     }
-    categorized_results = {cat: [] for cat in set(category_map.values())}
+    categorized_results = {cat: [] for cat in set(item["category"] for item in category_map.values())}
+    # --- MODIFICATION END ---
     
     try:
         bucket = storage_client.bucket(RESULTS_BUCKET)
@@ -218,9 +258,15 @@ def _read_all_findings_from_gcs(job_id):
                 data = json.loads(data_string)
                 # The check name is stored inside the JSON object itself
                 check_name = data.get("Check")
-                category = category_map.get(check_name)
-                if category:
+                
+                # --- MODIFICATION START: Extract category and weight ---
+                check_info = category_map.get(check_name)
+                if check_info:
+                    category = check_info["category"]
+                    # Attach the weight to the data being stored (Crucial for scoring)
+                    data["Weight"] = check_info["weight"] 
                     categorized_results[category].append(data)
+                # --- MODIFICATION END ---
             except Exception as e:
                 logging.error(f"Failed to read and process GCS finding {blob.name}: {e}")
     except Exception as e:
@@ -2384,20 +2430,33 @@ def generate_csv_data(all_results):
             check_name = finding_group.get('Check', 'Unnamed Check')
             status = finding_group.get('Status', 'N/A')
             details = finding_group.get('Finding')
+            
+            # --- MODIFICATION START: Include Weight in the output for transparency ---
+            weight = finding_group.get('Weight', 'N/A')
+            # --- MODIFICATION END ---
+
 
             if isinstance(details, list) and details and isinstance(details[0], dict):
                 # For structured data, create headers and write each dict as a new row
-                headers = ['Check', 'Status'] + list(details[0].keys())
+                # --- MODIFICATION START: Add Weight column to header ---
+                headers = ['Check', 'Status', 'Weight'] + list(details[0].keys())
+                # --- MODIFICATION END ---
                 writer.writerow(headers)
                 for detail_dict in details:
-                    row_data = [check_name, status] + list(detail_dict.values())
+                    # --- MODIFICATION START: Add Weight value to row ---
+                    row_data = [check_name, status, weight] + list(detail_dict.values())
+                    # --- MODIFICATION END ---
                     writer.writerow(row_data)
                 writer.writerow([]) # Add a space after a detailed check
             else:
                 # Fallback for simple findings (e.g., compliant checks)
-                writer.writerow(['Check', 'Status', 'Details'])
+                # --- MODIFICATION START: Add Weight column to header ---
+                writer.writerow(['Check', 'Status', 'Weight', 'Details'])
+                # --- MODIFICATION END ---
                 details_str = '; '.join(map(str, details)) if isinstance(details, list) else str(details)
-                writer.writerow([check_name, status, details_str])
+                # --- MODIFICATION START: Add Weight value to row ---
+                writer.writerow([check_name, status, weight, details_str])
+                # --- MODIFICATION END ---
 
     # --- Main Loop to Write All Other Sections ---
     for category_name, findings in all_results.items():
@@ -2597,21 +2656,45 @@ def generate_html_report(scope, scope_id, job_id, **all_results):
         org_policy_content_data = (org_policy_rows, compliant_policy_count, total_policies)
 
     category_scores = {}
+    # --- MODIFICATION START: CALCULATE WEIGHTED SCORES ---
+    ORG_POLICY_CHECK_WEIGHT = 2 # Define Org Policy checks base weight for consistency
+    score_context_for_ai = {} 
     category_order = ["Security & Identity", "Cost Optimization", "Reliability & Resilience", "Operational Excellence & Observability"]
     all_other_findings = []
+    
     for category_name in category_order:
         findings = all_results.get(category_name, [])
         all_other_findings.extend(findings)
-        grouped_data = group_findings(findings)
-        pass_count = sum(1 for g in grouped_data.values() if g.get('Status') == 'Compliant')
-        fail_count = sum(1 for g in grouped_data.values() if g.get('Status') in ["Action Required", "Investigation Recommended", "Error"])
+        
+        total_possible_weight = 0
+        passed_weight = 0
+        
+        # Group by check name to ensure each check's weight is counted only once
+        checks_processed = {} 
+        for finding_group in findings:
+            check_name = finding_group.get('Check')
+            status = finding_group.get('Status')
+            weight = finding_group.get('Weight', 1) # Default to 1 if weight is missing
+            
+            # If the check hasn't been processed yet in this category
+            if check_name not in checks_processed:
+                total_possible_weight += weight
+                if status == 'Compliant':
+                    passed_weight += weight
+                checks_processed[check_name] = True
+        
+        # Handle Organization Policies (Only for Security & Identity)
         if category_name == "Security & Identity" and org_policy_content_data:
             _, org_compliant, org_total = org_policy_content_data
-            pass_count += org_compliant
-            fail_count += (org_total - org_compliant)
-        total_for_score = pass_count + fail_count
-        score = (pass_count / total_for_score) * 100 if total_for_score > 0 else 100
+            total_possible_weight += org_total * ORG_POLICY_CHECK_WEIGHT
+            passed_weight += org_compliant * ORG_POLICY_CHECK_WEIGHT
+        
+        # Calculate the final score
+        score = (passed_weight / total_possible_weight) * 100 if total_possible_weight > 0 else 100
         category_scores[category_name] = score
+        score_context_for_ai[category_name] = f"{score:.0f}%" 
+    
+    # --- MODIFICATION END: END WEIGHTED SCORE CALCULATION ---
 
     grouped_all_findings = group_findings(all_other_findings)
     action_count = sum(1 for g in grouped_all_findings.values() if g.get('Status') == 'Action Required')
@@ -2811,603 +2894,4 @@ def index():
                 label { font-weight: 500; display: block; margin-bottom: 5px; }
                 select, button { font-size: 16px; padding: 12px; border-radius: 5px; border: 1px solid var(--border-color); width: 100%; box-sizing: border-box; }
                 button { background-color: var(--primary-color); color: white; cursor: pointer; font-weight: 500; }
-                button:disabled { background-color: #e0e0e0; cursor: not-allowed; }
-                #loader { display: none; margin-top: 10px; font-style: italic; color: var(--text-color); }
-            </style>
-        </head>
-        <body>
-            <div class="scan-card">
-                <h1>Review Your Cloud Environment</h1>
-                <p>Select a scope and resource to begin a comprehensive review.</p>
-                <form action="/scan" method="post">
-                    <div class="form-group">
-                        <label for="scope">1. Select Scan Scope:</label>
-                        <select id="scope" name="scope">
-                            <option value="" disabled selected>-- Choose a scope --</option>
-                            <option value="organization">Organization</option>
-                            <option value="folder">Folder</option>
-                            <option value="project">Project</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="scope_id">2. Select Resource:</label>
-                        <select id="scope_id" name="scope_id" required disabled>
-                            <option value="" disabled selected>-- Select scope first --</option>
-                        </select>
-                        <div id="loader">Loading resources...</div>
-                    </div>
-                    <button id="submit-btn" type="submit" disabled>Start Scan</button>
-                </form>
-            </div>
-
-            <script>
-                document.addEventListener('DOMContentLoaded', function() {
-                    const scopeSelect = document.getElementById('scope');
-                    const resourceSelect = document.getElementById('scope_id');
-                    const loader = document.getElementById('loader');
-                    const submitBtn = document.getElementById('submit-btn');
-
-                    scopeSelect.addEventListener('change', async function() {
-                        const selectedScope = this.value;
-                        if (!selectedScope) return;
-
-                        // Reset and show loader
-                        resourceSelect.innerHTML = '<option value="" disabled selected>-- Loading... --</option>';
-                        resourceSelect.disabled = true;
-                        submitBtn.disabled = true;
-                        loader.style.display = 'block';
-
-                        try {
-                            const response = await fetch(`/api/list-resources?scope=${selectedScope}`);
-                            if (!response.ok) {
-                                throw new Error('Failed to fetch resources.');
-                            }
-                            const resources = await response.json();
-
-                            // Clear dropdown and add new options
-                            resourceSelect.innerHTML = '<option value="" disabled selected>-- Select a resource --</option>';
-                            if (resources.length > 0) {
-                                resources.forEach(resource => {
-                                    const option = new Option(resource.name, resource.id);
-                                    resourceSelect.appendChild(option);
-                                });
-                                resourceSelect.disabled = false;
-                            } else {
-                                resourceSelect.innerHTML = '<option value="" disabled selected>-- No resources found --</option>';
-                            }
-                        } catch (error) {
-                            console.error('Error:', error);
-                            resourceSelect.innerHTML = '<option value="" disabled selected>-- Error loading resources --</option>';
-                        } finally {
-                            loader.style.display = 'none';
-                        }
-                    });
-
-                    resourceSelect.addEventListener('change', function() {
-                        if (this.value) {
-                            submitBtn.disabled = false;
-                        } else {
-                            submitBtn.disabled = true;
-                        }
-                    });
-                });
-            </script>
-        </body>
-        </html>
-    """)
-
-@app.route('/scan', methods=['POST'])
-def create_scan_task():
-    """
-    Receives the scope ( Org, Folder or Project ) from the form, creates an asynchronous Cloud Task
-    to perform the scan, and redirects the user to a status page.
-    """
-    scope = request.form['scope']
-    scope_id = request.form['scope_id']
-    if not scope_id or not scope:
-        return "Scope and ID are required.", 400
-
-    job_id = str(uuid.uuid4())
-    print(f"Creating scan task for {scope}: {scope_id} with Job ID: {job_id}")
-
-    task = {
-        "http_request": {
-            "http_method": tasks_v2.HttpMethod.POST,
-            "url": f"{WORKER_URL}/run-scan",
-            "headers": {"Content-Type": "application/json"},
-            "oidc_token": {
-                "service_account_email": os.environ.get('SERVICE_ACCOUNT_EMAIL')
-            },
-        }
-    }
-    # NEW: Use a generic payload
-    task["http_request"]["body"] = json.dumps({"scope": scope, "scope_id": scope_id, "job_id": job_id}).encode()
-
-    parent = tasks_client.queue_path(PROJECT_ID, LOCATION, TASK_QUEUE)
-    tasks_client.create_task(parent=parent, task=task)
-    
-    # NEW: Pass both IDs to the status page
-    return redirect(url_for('get_status', job_id=job_id, scope_id=scope_id, scope=scope))
-
-@app.route('/run-scan', methods=['POST'])
-def run_scan_worker():
-    """
-    The worker endpoint triggered by Cloud Tasks. It executes the main `run_all_checks`
-    function and uploads the generated reports to Google Cloud Storage.
-    """
-    data, scope_id, job_id = request.get_json(force=True), None, None
-    try:
-        scope = data['scope']
-        scope_id = data['scope_id']
-        job_id = data['job_id']
-        print(f"[{job_id}] Worker received task for ID: {scope_id}")
-
-        update_status_in_gcs(job_id, scope_id, 5, "Initializing scan and listing resources...")
-
-        # --- Throttling logic setup ---
-        # We will only update GCS if at least 2 seconds have passed since the last update.
-        UPDATE_INTERVAL = 2  # seconds
-        last_update_time = 0
-        # A lock ensures thread-safe updates to the last_update_time variable.
-        lock = threading.Lock()
-        final_progress = {"progress": 0, "task": ""}
-
-        def progress_reporter(progress, current_task):
-            nonlocal last_update_time
-            current_time = time.time()
-
-            # Store the latest progress regardless of timing
-            final_progress["progress"] = progress
-            final_progress["task"] = current_task
-
-            with lock:
-                if (current_time - last_update_time) > UPDATE_INTERVAL:
-                    update_status_in_gcs(job_id, scope_id, progress, current_task)
-                    last_update_time = current_time
-
-        run_all_checks(scope, scope_id, job_id, progress_callback=progress_reporter)
-
-        # --- Final, unconditional update after checks complete ---
-        # This ensures the user sees the 100% completion of the checks phase, even if
-        # it happened within the 2-second throttle window.
-        if final_progress["task"]:
-            update_status_in_gcs(job_id, scope_id, final_progress["progress"], final_progress["task"])
-
-        update_status_in_gcs(job_id, scope_id, 98, "Generating final HTML and CSV reports...")
-
-        # 2. Read all results back from /gcs for report generation
-        all_results = _read_all_findings_from_gcs(job_id)
-        # Also read the special-cased org policy data
-        org_policy_data = _read_org_policies_from_gcs(job_id)
-        if org_policy_data[0] and org_policy_data[1]:
-            all_results["Organization Policies"] = org_policy_data
-
-        html_report = generate_html_report(scope, scope_id, job_id, **all_results)
-        csv_report = generate_csv_data(all_results)
-
-
-        bucket = storage_client.bucket(RESULTS_BUCKET)
-        bucket.blob(f"{job_id}/{scope_id}_report.html").upload_from_string(html_report, content_type='text/html')
-        bucket.blob(f"{job_id}/{scope_id}_report.csv").upload_from_string(csv_report, content_type='text/csv')
-
-        update_status_in_gcs(job_id, scope_id, 100, "Scan complete!", status="completed")
-
-        print(f"[{job_id}] Task completed successfully.")
-        return "Scan completed and reports uploaded.", 200
-    except Exception as e:
-        print(f"[{job_id}] CRITICAL ERROR in worker for ID {scope_id}: {e}")
-        traceback.print_exc()
-        if job_id and scope_id:
-             update_status_in_gcs(job_id, scope_id, 100, f"A critical error occurred: {e}", status="error")
-        return "Internal Server Error", 500
-    finally:
-        # CRUCIAL: Clean up all intermediate files from GCS for this job_id
-        if job_id:
-            print(f"[{job_id}] Cleaning up intermediate files from GCS...")
-            try:
-                bucket = storage_client.bucket(RESULTS_BUCKET)
-                prefix_to_delete = f"intermediate/{job_id}/"
-                blobs_to_delete = list(bucket.list_blobs(prefix=prefix_to_delete))
-                if blobs_to_delete:
-                    bucket.delete_blobs(blobs_to_delete)
-                    print(f"[{job_id}] Deleted {len(blobs_to_delete)} intermediate files.")
-            except Exception as e:
-                logging.error(f"[{job_id}] Failed to clean up intermediate GCS files: {e}")
-    
-@app.route('/api/status/<string:job_id>/<string:scope_id>')
-def api_check_status(job_id, scope_id):
-    """
-    API endpoint for the front-end to poll. Checks the status.json file
-    in GCS to provide real-time progress updates.
-    """
-    try:
-        bucket = storage_client.bucket(RESULTS_BUCKET)
-        status_blob = bucket.blob(f"{job_id}/{scope_id}_status.json")
-
-        if status_blob.exists():
-            # If the status file is there, return its content
-            status_data = json.loads(status_blob.download_as_text())
-            return jsonify(status_data)
-        else:
-            # If the worker hasn't created the file yet, return a pending state
-            return jsonify({"status": "pending", "progress": 0, "current_task": "Waiting for task to start..."})
-            
-    except Exception as e:
-        print(f"Error checking status for job {job_id}: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/report/<string:job_id>/<string:scope_id>')
-def view_report(job_id, scope_id):
-    """Serves the final HTML report from GCS to the user."""
-    try:
-        bucket = storage_client.bucket(RESULTS_BUCKET)
-        report_blob_name = f"{job_id}/{scope_id}_report.html"
-        blob = bucket.blob(report_blob_name)
-
-        if not blob.exists():
-            return "Report not found or is still generating.", 404
-        
-        report_html = blob.download_as_text()
-        return report_html
-
-    except Exception as e:
-        print(f"Error fetching report {job_id} from GCS: {e}")
-        return "Could not retrieve report.", 500
-    
-@app.route('/api/get-insights', methods=['POST'])
-def get_insights():
-    """
-    On-demand endpoint to run a slower, more detailed scan for cost optimization
-    insights, separate from the main recommendations.
-    """
-    data = request.get_json()
-    scope = data.get('scope')
-    scope_id = data.get('scope_id')
-    if not scope_id or not scope:
-        return jsonify({"error": "Scope and Scope ID are required."}), 400
-
-    
-    def run_cost_optimization_insights(scope, scope_id):
-        print("💡 Performing on-demand detailed INSIGHT scan...")
-        all_findings = []
-        all_projects = list_projects_for_scope(scope, scope_id)
-        if not all_projects:
-            return []
-        
-        active_zones, active_regions = get_active_compute_locations(all_projects)
-        from google.cloud.recommender_v1 import RecommenderClient
-        recommender_client = RecommenderClient()
-
-        
-        global_insights = {
-            "Idle Images": "google.compute.image.IdleResourceInsight",
-        }
-        regional_insights = {
-            "Unassociated IP Addresses": "google.compute.address.IdleResourceInsight",
-            "Idle Cloud SQL Instances": "google.cloudsql.instance.IdleInsight",
-        }
-        zonal_insights = {
-            "Idle Disks": "google.compute.disk.IdleResourceInsight",
-            "VM CPU Usage": "google.compute.instance.CpuUsageInsight",
-            "VM CPU Prediction": "google.compute.instance.CpuUsagePredictionInsight",
-            "VM Memory Usage": "google.compute.instance.MemoryUsageInsight",
-            "VM Memory Prediction": "google.compute.instance.MemoryUsagePredictionInsight",
-            "VM Bandwidth": "google.compute.instance.NetworkThroughputInsight",
-            "MIG CPU Usage": "google.compute.instanceGroupManager.CpuUsageInsight",
-            "MIG Memory Usage": "google.compute.instanceGroupManager.MemoryUsageInsight",
-        }
-        
-        for project in all_projects:
-            project_id = project['projectId']
-            
-            # Scan for GLOBAL insights
-            for check_name, insight_type_id in global_insights.items():
-                parent = f"projects/{project_id}/locations/global/insightTypes/{insight_type_id}"
-                try:
-                    insights = recommender_client.list_insights(parent=parent)
-                    for insight in insights:
-                        resource_name = insight.target_resources[0].split('/')[-1] if insight.target_resources else 'N/A'
-                        all_findings.append({"check": check_name, "project": project_id, "resource": resource_name, "details": insight.description})
-                except Exception as e: logging.warning(f"Could not check global insight for {project_id}: {e}")
-
-            # Scan for REGIONAL insights
-            for loc in active_regions:
-                for check_name, insight_type_id in regional_insights.items():
-                    parent = f"projects/{project_id}/locations/{loc}/insightTypes/{insight_type_id}"
-                    try:
-                        insights = recommender_client.list_insights(parent=parent)
-                        for insight in insights:
-                            resource_name = insight.target_resources[0].split('/')[-1] if insight.target_resources else 'N/A'
-                            all_findings.append({"check": check_name, "project": project_id, "resource": resource_name, "details": insight.description})
-                    except Exception as e: logging.warning(f"Could not check regional insight for {project_id}: {e}")
-            
-            # Scan for ZONAL insights
-            for loc in active_zones:
-                for check_name, insight_type_id in zonal_insights.items():
-                    parent = f"projects/{project_id}/locations/{loc}/insightTypes/{insight_type_id}"
-                    try:
-                        insights = recommender_client.list_insights(parent=parent)
-                        for insight in insights:
-                            resource_name = insight.target_resources[0].split('/')[-1] if insight.target_resources else 'N/A'
-                            all_findings.append({"check": check_name, "project": project_id, "resource": resource_name, "details": insight.description})
-                    except Exception as e: logging.warning(f"Could not check zonal isnight for {project_id}: {e}")
-        
-        return all_findings
-
-    try:
-        insights = run_cost_optimization_insights(scope, scope_id)
-        return jsonify(insights)
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": f"An internal error occurred while fetching insights: {e}"}), 500
-    
-
-@app.route('/api/get-summary', methods=['POST'])
-def get_summary():
-    """
-    On-demand endpoint to generate a Gemini-powered executive summary
-    from the full CSV report data stored in GCS.
-    """
-    try:
-        data = request.get_json()
-        scope_id = data.get('scope_id')  # CORRECTED
-        job_id = data.get('job_id')
-        print(f"🤖 Received on-demand request for AI summary for job {job_id}...")
-
-        if not scope_id or not job_id:
-            return jsonify({"error": "Scope ID and Job ID are required."}), 400
-
-
-        # 1. Fetch the context (the full CSV report) from GCS
-        bucket = storage_client.bucket(RESULTS_BUCKET)
-        csv_blob_name = f"{job_id}/{scope_id}_report.csv"
-        blob = bucket.blob(csv_blob_name)
-        
-        if not blob.exists():
-            return jsonify({"error": "CSV report not found. Cannot generate summary."}), 404
-            
-        csv_data = blob.download_as_text()
-
-        # 2. Initialize Vertex AI and the Generative Model
-        vertexai.init(project=os.environ.get('PROJECT_ID'), location="global")
-        # Using 2.5 Flash as it's great for summarization and fast
-        model = GenerativeModel("gemini-2.5-flash") 
-
-        # 3. Use the optimized prompt
-        prompt = f"""
-        You are a strategic Google Cloud advisor specializing in security posture enhancement and cost optimization. Your task is to provide a balanced and action-oriented executive summary based on the following compliance and best practices report, which is provided in CSV format.
-
-        **Report Data:**
-        ```csv
-        {csv_data}
-        ```
-
-        **Instructions:**
-        1.  Start with a single, concise introductory sentence that summarizes the overall state of the organization's cloud environment.
-        2.  Identify the top 3-5 primary opportunities for enhancement and optimization. Use a bulleted list.
-        3.  For each area, briefly explain the implication and the opportunity in plain, business-focused language. Frame the points constructively.
-            * Instead of: "High security risk due to publicly accessible storage buckets."
-            * Use language like: "Opportunity to Enhance Data Security: By adjusting permissions on several storage buckets, we can significantly strengthen our data security posture."
-            * Instead of: "Significant cost savings are being missed by not addressing idle VMs."
-            * Use language like: "Opportunity for Cost Optimization: A number of virtual machines have been identified as idle, representing a clear opportunity to reduce operational costs."
-        4.  Conclude with a brief, forward-looking statement about the recommended next steps to capitalize on these opportunities.
-        5.  Keep the entire summary professional, concise, and easy for a non-technical executive to understand. Do not repeat the raw data from the report.
-        6.  **Tone and Voice:** Adopt a constructive and partnership-oriented tone. The goal is to highlight opportunities for improvement and strategic gains, not to create alarm. Focus on what can be achieved.
-        7.  Format your entire response in GitHub-flavored Markdown.
-        """
-        
-        # 4. Generate the summary
-        response = model.generate_content(prompt)
-        
-        print(f"✅ AI summary generated successfully for job {job_id}.")
-        return jsonify({"summary": response.text})
-
-    except Exception as e:
-        print(f"CRITICAL ERROR in /api/get-summary: {e}")
-        traceback.print_exc()
-        return jsonify({"error": "An internal error occurred while generating the AI summary."}), 500
-
-@app.route('/api/get-suggestions', methods=['POST'])
-def get_suggestions():
-    """
-    Receives a batch of findings from the report and uses the Gemini API
-    to generate gcloud remediation commands for each one.
-    """
-    try:
-        data = request.get_json()
-        actionable_findings = data.get('findings', [])
-        
-        remediation_map = {}
-        if actionable_findings:
-            print(f"🤖 On-demand request for {len(actionable_findings)} Gemini suggestions...")
-            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                def call_gemini(finding_info):
-                    # The generate_remediation_command function already has its own internal try/except,
-                    # which is good for handling individual AI call failures.
-                    return generate_remediation_command(finding_info['finding_text'], finding_info['project_id'])
-                
-                results = executor.map(call_gemini, actionable_findings)
-            
-            for i, command in enumerate(results):
-                # The key is now based on the original index from the batch
-                original_index = actionable_findings[i]['index']
-                remediation_map[f"finding-{original_index}"] = command
-
-            print("✅ Gemini on-demand suggestions received.")
-
-        return jsonify(remediation_map)
-
-    except Exception as e:
-        # This is the crucial safety net. It will catch any unhandled exceptions.
-        print(f"CRITICAL ERROR in /api/get-suggestions: {e}")
-        traceback.print_exc()
-        # Return a 500 error to the browser so the 'catch' block is triggered.
-        return jsonify({"error": "An internal error occurred on the server."}), 500
-
-@app.route('/status/<string:job_id>/<string:scope>/<string:scope_id>')
-def get_status(job_id, scope, scope_id):
-    """
-    Renders the status page that users see while a scan is running.
-    It simulates progress and polls the `/api/status` endpoint. Also generates
-    a signed URL for the CSV download.
-    """
-    if not scope_id:
-        return "Error:  ID is missing from the status URL.", 400
-
-    signed_csv_url = "#" 
-    try:
-        # --- START SIGNED LOGIC ---
-        
-        # 1. Get the default credentials from the metadata server
-        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-        
-        # 2. Manually refresh them to get a usable access token
-        auth_req = google.auth.transport.requests.Request()
-        creds.refresh(auth_req)
-        access_token = creds.token
-
-        # 3. Get the service account email from the environment variable
-        signer_email = os.environ.get('SERVICE_ACCOUNT_EMAIL')
-
-        # 4. Generate the signed URL, providing BOTH the email and the access token
-        #    This tells the library: "Use this token to authorize a request for
-        #    'signer_email' to sign the following content."
-        bucket = storage_client.bucket(RESULTS_BUCKET)
-        csv_blob_name = f"{job_id}/{scope_id}_report.csv"
-        blob = bucket.blob(csv_blob_name)
-        
-        expiration_time = datetime.now(timezone.utc) + timedelta(hours=1)
-        
-        signed_csv_url = blob.generate_signed_url(
-            version="v4",
-            expiration=expiration_time,
-            method="GET",
-            service_account_email=signer_email,
-            access_token=access_token  # <-- Pass the fetched token here
-        )
-        # --- END SIGNED LOGIC ---
-        
-    except Exception as e:
-        print(f"Could not generate signed URL for job {job_id}: {e}")
-    
-    # Pass the signed URL into the template
-    return render_template_string("""
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Scan in Progress...</title>
-            <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-            <style>
-                :root { --primary-color: #4285F4; --success-color: #1e8e3e; --background-color: #f8f9fa; --text-color: #3c4043; --border-color: #dfe1e5; --card-bg-color: #ffffff; }
-                body { font-family: 'Roboto', sans-serif; margin: 0; background-color: var(--background-color); color: var(--text-color); display: flex; align-items: center; justify-content: center; height: 100vh; }
-                .status-card { background-color: var(--card-bg-color); padding: 40px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); border: 1px solid var(--border-color); text-align: center; max-width: 600px; width: 100%; }
-                h1 { color: #202124; font-weight: 500; margin-top: 0; }
-                p { color: #5f6368; margin-bottom: 30px; line-height: 1.6; }
-                .progress-bar-container { background-color: #e9ecef; border-radius: 8px; height: 16px; width: 100%; margin: 20px 0; overflow: hidden; }
-                .progress-bar { background-color: var(--primary-color); height: 100%; width: 0%; border-radius: 8px; transition: width 0.4s linear; }
-                .loader { border: 4px solid #f3f3f3; border-top: 4px solid var(--primary-color); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
-                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-                .status-message { font-weight: 500; height: 24px; }
-                .button-group { display: flex; gap: 15px; justify-content: center; margin-top: 20px; }
-                .btn { text-decoration: none; display: inline-block; background-color: var(--primary-color); color: white; padding: 12px 20px; border-radius: 5px; border: none; cursor: pointer; font-size: 16px; font-weight: 500; transition: background-color 0.2s ease, box-shadow 0.2s ease; }
-                .btn:hover { box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-                .btn.secondary { background-color: #e8eaed; color: var(--text-color); }
-                .success-icon { font-size: 48px; color: var(--success-color); }
-            </style>
-        </head>
-        <body>
-            <div id="status-card" class="status-card">
-                </div>
-            
-            <script>
-                const job_id = "{{ job_id }}";
-                const scope_id = "{{ scope_id }}";
-                const signed_csv_url = "{{ signed_csv_url | safe }}"; 
-                const card = document.getElementById('status-card');
-
-                // --- UI Update Functions  ---
-                function showInProgressUI() {
-                    document.title = "Scan in Progress...";
-                    card.innerHTML = `
-                        <h1>Scan in Progress</h1>
-                        <p>Your request for job <strong>${job_id}</strong> is being processed. This may take several minutes.</p>
-                        <div class="loader"></div>
-                        <p id="status-message" class="status-message">Initializing...</p>
-                        <div class="progress-bar-container">
-                            <div id="progress-bar" class="progress-bar"></div>
-                        </div>
-                        <p id="progress-text">0%</p>
-                    `;
-                }
-
-                function showReadyUI() {
-                    document.title = "Report Ready!";
-                    const report_url = `/report/${job_id}/${scope_id}`;
-                    card.innerHTML = `
-                        <div class="success-icon">&#10003;</div>
-                        <h1>Scan Complete!</h1>
-                        <p>Your report is ready. You can now view the interactive report online or download the raw data as a CSV file.</p>
-                        <div class="button-group">
-                            <a href="${report_url}" target="_blank" class="btn">View Interactive Report</a>
-                            <a href="${signed_csv_url}" class="btn secondary">Download CSV Report</a>
-                        </div>
-                    `;
-                }
-
-                function showErrorUI(message) {
-                    document.title = "Scan Failed!";
-                    card.innerHTML = `
-                        <div class="success-icon" style="color: var(--error-color);">&#10007;</div>
-                        <h1>Scan Failed</h1>
-                        <p>An error occurred while processing your request for job <strong>${job_id}</strong>.</p>
-                        <p style="font-family: monospace; background-color: #f1f3f4; padding: 10px; border-radius: 4px;">${message || 'Unknown error. Please check the application logs.'}</p>
-                    `;
-                }
-                
-                // --- Logic to run on page load ---
-                showInProgressUI();
-                
-                const progressBar = document.getElementById('progress-bar');
-                const progressText = document.getElementById('progress-text');
-                const statusMessage = document.getElementById('status-message');
-
-                // --- Real-time API Polling ---
-                async function checkStatus() {
-                    try {
-                        const response = await fetch(`/api/status/${job_id}/${scope_id}`);
-                        if (!response.ok) {
-                            // Handle server errors during polling
-                            throw new Error(`API returned status ${response.status}`);
-                        }
-                        const data = await response.json();
-
-                        // Update the UI with real data from the backend
-                        if (progressBar) progressBar.style.width = data.progress + '%';
-                        if (progressText) progressText.textContent = Math.round(data.progress) + '%';
-                        if (statusMessage) statusMessage.textContent = data.current_task;
-
-                        // Check the final status
-                        if (data.status === 'completed') {
-                            clearInterval(statusInterval); // Stop polling
-                            setTimeout(showReadyUI, 500); // Short delay to show 100%
-                        } else if (data.status === 'error') {
-                            clearInterval(statusInterval); // Stop polling
-                            showErrorUI(data.current_task);
-                        }
-                    } catch (e) {
-                        console.error("Failed to get status:", e);
-                        // Optional: You could stop polling after several consecutive errors
-                    }
-                }
-                
-                const statusInterval = setInterval(checkStatus, 3000); // Check every 3 seconds
-                checkStatus(); // Initial check on page load
-            </script>
-        </body>
-        </html>
-    """, job_id=job_id, scope_id=scope_id, scope=scope, signed_csv_url=signed_csv_url)
-
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+                button:disabled { background-color: #e0e0e0; cursor:
